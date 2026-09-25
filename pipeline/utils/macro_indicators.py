@@ -9,7 +9,6 @@ from fredapi import Fred
 
 # Default tickers. ^VIX = CBOE Volatility Index.
 # ^TNX = 10-Year Treasury Yield Index (quoted x10, e.g. 42.5 => 4.25%).
-DEFAULT_YF_TICKERS = {"^VIX": "VIX", "^TNX": "10Y_Treasury_Yield"}
 
 # Tickers whose raw value must be divided by 10 to become a percent.
 _SCALE_BY_TENTH = {"^TNX"}
@@ -69,12 +68,14 @@ def _download_yf(tickers, start_date, end_date, max_retries=3, pause=2.0):
 
     return collected[tickers]
 
+DEFAULT_YF_TICKERS = {"^VIX": "VIX", "^TNX": "10Y_Treasury_Yield"}
 
 def get_macro_data(
     start_date="2025-01-01",
     end_date=None,
     yf_tickers=None,
     cpi_lookback_start="2024-01-01",
+
 ):
     """Build a daily macro indicator table.
 
@@ -84,10 +85,8 @@ def get_macro_data(
 
     ``yf_tickers`` maps a Yahoo symbol to its output column name.
     """
-    if end_date is None:
-        end_date = datetime.today().strftime("%Y-%m-%d")
-    if yf_tickers is None:
-        yf_tickers = dict(DEFAULT_YF_TICKERS)
+    if end_date is None: end_date = datetime.today().strftime("%Y-%m-%d")
+    if yf_tickers is None: yf_tickers = dict(DEFAULT_YF_TICKERS)
 
     # Load variables from the .env file into the environment.
     dotenv.load_dotenv()
@@ -99,7 +98,7 @@ def get_macro_data(
     # fredapi automatically reads os.environ['FRED_API_KEY'].
     fred = Fred()
 
-    print("Pulling financial data...")
+    print("Pulling macroeconomic data...")
 
     # 1. Fetch market indicators from yfinance.
     market_data = _download_yf(list(yf_tickers), start_date, end_date)
@@ -124,7 +123,8 @@ def get_macro_data(
     # Resample to month start so a missing release can't shift the 12-period
     # window into comparing the wrong months.
     cpi_df = cpi_df.resample("MS").last()
-    cpi_df["Official_Inflation_YoY"] = cpi_df["CPI"].pct_change(periods=12) * 100
+    
+    cpi_df["Official_Inflation_YoY"] = cpi_df["CPI"].pct_change(periods=12, fill_method = None) * 100
 
     # 4. Merge onto a unified daily calendar.
     daily_calendar = pd.date_range(start=start_date, end=end_date, freq="D")
