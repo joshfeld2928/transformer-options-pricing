@@ -74,8 +74,7 @@ def get_macro_data(
     start_date="2025-01-01",
     end_date=None,
     yf_tickers=None,
-    cpi_lookback_start="2024-01-01",
-
+    cpi_lookback_start="2024-01-01"
 ):
     """Build a daily macro indicator table.
 
@@ -98,7 +97,6 @@ def get_macro_data(
     # fredapi automatically reads os.environ['FRED_API_KEY'].
     fred = Fred()
 
-    print("Pulling macroeconomic data...")
 
     # 1. Fetch market indicators from yfinance.
     market_data = _download_yf(list(yf_tickers), start_date, end_date)
