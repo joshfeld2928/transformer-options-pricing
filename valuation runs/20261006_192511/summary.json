@@ -1,0 +1,23 @@
+{
+  "ticker": "AAPL",
+  "as_of": "2026-10-05",
+  "last_close": 332.8900146484375,
+  "approved": false,
+  "accepted_models": [
+    "autoformer",
+    "fedformer",
+    "informer",
+    "pyraformer"
+  ],
+  "horizon_date": "2026-10-19",
+  "horizon_spot": 337.3486099243164,
+  "n_contracts": 52,
+  "issues": [
+    "BLOCKING - risk-free rate is 10x too small. Backing r out of price_now (given IV, tau, S=332.89) gives r=0.00531 for all 52 contracts. That is panel column 10Y_Treasury_Yield (last value 0.5311) divided by 100, i.e. treated as a percent. But the panel column is itself already scaled by 1/10 (range 0.4246-0.5311 where the 10Y should be ~4.25-5.31%), so the pricer used 0.531% instead of ~5.3%. Market mids imply a carry of ~3.77%. Net: r is off by a factor of ~10 under any interpretation.",
+    "Rate error systematically biases puts. Model prices exceed market mid on EVERY put (mean signed error +$0.94); repricing at r=3.77% cuts put mean |error| from $0.94 to $0.60. All rho_now/rho_horizon values are unusable as reported.",
+    "Listed impliedVolatility and mid_price are mutually inconsistent for deep ITM strikes. Even after correcting the rate, BS at the listed IV fails to reproduce the mid by up to $1.65 (P00355, P00350, C00305). This is the 'model_vs_market' flag from the checklist - stale/wide quotes on low-liquidity ITM strikes. 11 of 52 contracts show |model_vs_market|/mid > 10%, all at |K/S - 1| > 2%.",
+    "EVENT RISK in the 2026-10-30 expiry. AAPL Q4 FY26 earnings are confirmed for Oct 29 2026 after close, which falls INSIDE the life of the Oct-30 contracts (though outside the Oct-19 forecast horizon). Those quotes carry an earnings vol premium: mean IV 0.282 vs 0.261 for Oct-23, positive on 21 of 26 matched strike/type pairs. Holding IV constant to the horizon and ignoring post-horizon event decay will misstate the Oct-30 leg."
+  ],
+  "notes": "FORECASTS: all four models accepted. The sanity harness returned zero flags per model, and terminal-close dispersion is 0.0887, below the 0.1 note threshold. No model shows extreme or flat returns, so none meets the rejection criterion. Earnings (Oct 29) sit outside the Oct 19 horizon, so the forecast path itself is not event-contaminated. Mean cumulative log return +0.0126 -> horizon_spot 337.35 (+1.34%).\n\nTwo caveats I am recording rather than acting on, since neither is a listed rejection trigger: (1) fedformer's train loss of 1.0055 is 50-65% above the other three (0.603-0.691) and it is also the most extreme call (+5.5%); it pulls the ensemble mean up and hence drives the positive expected_pnl on the call side. (2) directional disagreement is wide - informer -3.27% vs fedformer +5.50% - so the +1.34% ensemble drift is a thin average of opposing views, not a consensus. The value_low/value_high band should be the decision input here, not expected_pnl off the mean. informer's path is also unusually smooth (5.1% annualized path vol vs 22% realized).\n\nGREEKS: check_greeks is fully clean - zero call deltas outside [0,1], zero put deltas outside [-1,0], zero negative gamma, zero negative vega, zero calls below intrinsic. Both expiries (Oct 23, Oct 30) survive past the Oct 19 horizon, so tau_horizon is positive throughout.\n\nVERDICT: the forecast layer passes; the pricing layer does not. The r=0.531% input is a deterministic, reproducible unit bug, not a modeling judgment call, and it taints every put price and every rho in valuation.csv. Fix the 10Y scaling (or source a short-rate/OIS input, which is the correct discount for 12-17 day options anyway), re-run price_contracts, and this should clear on resubmission. Suggest also dropping the deep-ITM strikes with inconsistent IV/mid, or refitting IV from the mid, and treating the Oct-30 expiry separately for earnings.",
+  "output_dir": "C:\\Users\\joshf\\DevTools\\GitHub\\transformer-options-pricing\\valuation runs\\20261006_192511"
+}

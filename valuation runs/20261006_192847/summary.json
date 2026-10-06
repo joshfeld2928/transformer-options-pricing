@@ -1,0 +1,25 @@
+{
+  "ticker": "AAPL",
+  "as_of": "2026-10-05",
+  "last_close": 332.8900146484375,
+  "approved": true,
+  "accepted_models": [
+    "autoformer",
+    "fedformer",
+    "informer",
+    "pyraformer"
+  ],
+  "horizon_date": "2026-10-19",
+  "horizon_spot": 337.5846633911133,
+  "n_contracts": 52,
+  "issues": [
+    "RATE SCALE ERROR: pricing used r=0.53%. The panel field 10Y_Treasury_Yield=0.5311 was treated as a percent (/100). Put-call parity on market mids implies r~7.5-8.5%; rescaling the panel field gives ~5.3%. Either way the rate used is an order of magnitude too low.",
+    "TENOR MISMATCH: a 10Y yield is used to discount 2-4 week options; a short bill rate is the correct input.",
+    "AMERICAN/EUROPEAN MISMATCH: European Black-Scholes applied to American-style AAPL options using vendor IVs. Produces systematic model>market bias concentrated in deep-ITM puts (model_vs_market up to +2.29; put bias +0.94 vs call bias +0.15) - consistent with an unmodelled early-exercise premium, not a forecast defect.",
+    "DIRECTIONAL DISAGREEMENT: fedformer (+5.8%) and pyraformer (+4.3%) are bullish while autoformer (-1.5%) and informer (-3.3%) are bearish. The +1.3% mean is a cancellation of opposing views, so horizon_spot=337.58 is low-conviction despite dispersion (0.0914) sitting under the 0.1 threshold.",
+    "FEDFORMER OUTLIER: highest train loss (1.005 vs 0.60-0.69 for the others) and its terminal close 352.63 exceeds the maximum close in the entire 123-day sample (341.07). No sanity flag, so retained, but it is the weakest-fit model driving the bullish tilt.",
+    "HORIZON KNIFE-EDGE: the 2026-10-23 expiry has only ~4 days left at the horizon (tau_horizon=0.011). Horizon gamma/theta are unstable and price_horizon is near-binary for those strikes."
+  ],
+  "notes": "Validation: all four models returned empty sanity lists (no extreme or flat returns), so all four are accepted per the rubric. Terminal-close dispersion 0.0914 is below the 0.1 threshold and is recorded as a note only.\n\nEvent check: AAPL Q4 FY2026 earnings are scheduled for 2026-10-29, after close - outside the 2026-10-19 horizon. No earnings risk inside the forecast window. Note that the 2026-10-30 expiry contracts DO span that earnings date, which helps explain their elevated IV relative to the 10-23 expiry.\n\nGreeks: check_greeks is clean - call deltas in [0,1], put deltas in [-1,0], no negative gamma or vega, no calls below intrinsic. The IV smile across the 10-23 calls is monotone and well-behaved (0.403 at 305 down to ~0.218 at 355). ATM IV ~0.24 is consistent with realized_vol 0.2249.\n\nQuantified impact of the rate error: repricing the full 52-contract book at r=5.31% instead of 0.53% changes expected P&L by at most 0.57 per contract and flips the sign of expected P&L on only 1 of 52 contracts. Mean absolute model-vs-market error improves modestly (0.589 -> 0.502) and the put-side bias halves (+0.94 -> +0.44), confirming the rate is misspecified rather than the forecasts being wrong.\n\nRecommendation: the forecasts themselves are sound and approved, but the valuation table should be re-run with a correctly scaled short-tenor rate before any of these numbers are traded on. The directional split across models means the mean-forecast spot is weakly supported - the value_low/value_high band (e.g. 17.81 to 47.65 on a contract marked at 30.44) is the honest uncertainty, not the point estimate.",
+  "output_dir": "C:\\Users\\joshf\\DevTools\\GitHub\\transformer-options-pricing\\valuation runs\\20261006_192847"
+}
