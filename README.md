@@ -1,6 +1,12 @@
 # Transformer Options Pricing
 
-Forecast-driven option valuation. Four long-sequence forecasting transformers (Informer, Autoformer, FEDformer, Pyraformer) are trained on a stock's recent price history and macro indicators. They predict daily log returns over a short horizon. The forecast spot price is then used to value near-the-money options with Black-Scholes and compute their Greeks.
+Forecast-driven option valuation. Four long-sequence forecasting transformers (Informer, Autoformer, FEDformer, Pyraformer) are trained on a stock's recent price history and macro indicators. They predict daily log returns over a short horizon. The forecast spot price is then used to value near-the-money options with Black-Scholes and compute their Greeks. Results were recreated from the following papers: 
+
+* [Autoformer: Decomposition Transformers with Auto-Correlation for Long-Term Series Forecasting](https://arxiv.org/abs/2106.13008) (NeurIPS 2021)
+* [Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting](https://arxiv.org/abs/2012.07436) (AAAI 2021)
+* [Pyraformer: Low-Complexity Pyramidal Attention for Long-Range Time Series Modeling and Forecasting](https://www.google.com/search?q=https://openreview.net/forum%3Fid%3D0EXmFzVa5ge) (ICLR 2022)
+* [FEDformer: Frequency Enhanced Decomposed Transformer for Long-term Series Forecasting](https://arxiv.org/abs/2201.12740) (ICML 2022)
+* [Transformer Architectures for Option Pricing: Valuation, Prediction, and Trading](https://www.google.com/search?q=https://doi.org/10.1007/978-3-032-25035-3_18) (ICAART 2025 / Springer)
 
 The pipeline is coordinated by two Claude agents (LangChain + LangGraph), with deterministic validation gates between them:
 
