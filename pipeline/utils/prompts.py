@@ -1,4 +1,4 @@
-"""Default agent system prompts. Deliberately minimal placeholders."""
+"""Default agent system prompts, keep short for efficiency and cost."""
 
 MARKET_DATA_PROMPT = (
     "You prepare model-ready market data. Pick a ticker and features for the "
