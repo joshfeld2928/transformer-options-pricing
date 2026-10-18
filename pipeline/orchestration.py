@@ -95,7 +95,8 @@ def build_graph(ctx: RunContext, llm, max_data_attempts=3, allow_code=True, log=
         return "market_data"
 
     def transformer(state: PipelineState):
-        ctx.forecasts, ctx.train_losses, ctx.last_close = run_forecasts(ctx.panel, ctx.request, ctx.config, log=log)
+        ctx.forecasts, ctx.train_diagnostics, ctx.last_close = run_forecasts(ctx.panel, ctx.request, ctx.config,
+                                                                             log=log)
         write_artifacts(ctx)
         return {}
 
@@ -157,11 +158,20 @@ if __name__ == "__main__":
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--models", nargs="+", help="subset of transformer models to train")
     parser.add_argument("--pred-len", type=int, default=10)
-    parser.add_argument("--epochs", type=int, default=8)
+    parser.add_argument("--epochs", type=int, default=100, help="max epochs (early stopping usually ends sooner)")
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--patience", type=int, default=10, help="early-stopping patience in epochs")
+    parser.add_argument("--val-frac", type=float, default=0.15, help="share of windows held out for validation")
+    parser.add_argument("--no-refit", action="store_true", help="skip retraining on train+val before forecasting")
+    parser.add_argument("--save-checkpoints", action="store_true", help="write checkpoints/<TICKER>/<model>/")
     parser.add_argument("--no-code", action="store_true", help="disable the run_python tool")
     args = parser.parse_args()
 
-    cfg = ForecastConfig(pred_len=args.pred_len, epochs=args.epochs,
+    cfg = ForecastConfig(pred_len=args.pred_len, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
+                         weight_decay=args.weight_decay, patience=args.patience, val_frac=args.val_frac,
+                         refit_full=not args.no_refit, save_checkpoints=args.save_checkpoints,
                          **({"models": args.models} if args.models else {}))
     state, _ = run_pipeline(args.query, cfg, model=args.model, allow_code=not args.no_code)
     print(json.dumps(state["summary"], indent=2))

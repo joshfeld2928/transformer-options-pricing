@@ -1,1 +1,6 @@
 .env
+__pycache__/
+.pytest_cache/
+.jax_cache/
+checkpoints/
+evaluation runs/

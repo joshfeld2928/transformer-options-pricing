@@ -7,3 +7,4 @@ description: Feature choices and fixes for build_feature_panel errors.
 - "rows < N needed": raise `history_months`.
 - Macro features need `FRED_API_KEY`; drop them if the FRED pull fails.
 - Unsure a symbol is valid or listed: web search before building.
+- Use at least 12 months of history (default 24). With fewer rows the models get too few validation windows for early stopping and fall back to fixed-epoch training.

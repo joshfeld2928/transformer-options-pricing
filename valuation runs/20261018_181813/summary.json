@@ -1,0 +1,24 @@
+{
+  "ticker": "AAPL",
+  "as_of": "2026-10-16",
+  "last_close": 343.4599914550781,
+  "approved": true,
+  "accepted_models": [
+    "autoformer",
+    "fedformer",
+    "informer",
+    "pyraformer"
+  ],
+  "horizon_date": "2026-10-30",
+  "horizon_spot": 347.0319137573242,
+  "n_contracts": 54,
+  "issues": [
+    "model_vs_market is large AND one-sided: all 54/54 contracts reprice ABOVE the market mid (mean +$0.80, max +$1.61; 33 contracts >$0.50). Since both calls and puts are overpriced, the error is vega-positive, i.e. the listed impliedVolatility is systematically higher than the IV implied by the quoted mids (stale/mismatched IV-vs-quote snapshot) rather than a rate/dividend sign error. Absolute price_now levels should not be trusted; use relative/P&L comparisons only until the IV and quote snapshots are re-synced.",
+    "Event-horizon mismatch: Apple's Q4 FY2026 earnings is confirmed for Mon Nov 2, 2026 (after market close), which falls AFTER the Oct 30 forecast horizon but BEFORE both available expiries (Nov 6 and Nov 13). Every priced contract's IV (mean 32-34%) embeds an earnings jump that the forecast path explicitly does not contain. Expected_pnl is therefore structurally biased negative (puts average -$3.83, calls -$0.60) as an artifact of decaying event-inflated IV, not as tradeable signal.",
+    "Volatility inconsistency: listed IVs (26.8%-44.0%) are roughly double current realized vol (20d = 16.3%, panel realized_vol = 15.9%). Consistent with the earnings premium above, but it means the horizon repricing (which holds IV fixed) overstates remaining option value at Oct 30.",
+    "Weak predictive skill: validation MSE on the standardized target is 0.85-0.99 against a naive zero-forecast baseline of 1.00, i.e. R-squared of only ~15% (informer) down to ~1% (fedformer). Fedformer (0.9897) is statistically indistinguishable from predicting zero return, and autoformer early-stopped at epoch 2 of 12. No model was rejected since none triggered a sanity failure, but the ensemble carries little directional information.",
+    "Data hygiene (non-blocking): the 10Y_Treasury_Yield column averages 0.438 with a 0.395-0.531 range. If these are percent units this implies a ~0.44% 10Y yield, which is implausible for 2025-26; the series looks mis-scaled by 10x (should be ~4.4%). Harmless as a scaled model feature, but must not be passed through as the risk-free discount rate."
+  ],
+  "notes": "VALIDATION SUMMARY \u2014 AAPL, 10 trading days, spot 343.46, horizon 2026-10-30.\n\nPanel: 493 rows / 24 months (2024-10-29 to 2026-10-16), log_return target present, no gaps; final underlying_close (343.46) reconciles exactly with last_close. Meets the >=12-month minimum, so early stopping was active rather than fixed-epoch fallback (confirmed: all four models stopped before max epochs).\n\nForecasts: sanity checks empty for all four models - no extreme or flat return paths, so no model met the rejection criteria and all four were accepted into the ensemble. Terminal-close dispersion 0.0535 is below the 0.1 threshold, so it is recorded as a note, not a rejection; still, the terminal spread is wide in dollar terms (autoformer 336.44 bearish vs informer 354.80 bullish, a ~5.5% spread straddling spot). Ensemble horizon_spot of 347.03 was verified as the exact equal-weight mean of the four terminal closes (+1.04% over 10 days). Direction is 3-1 bullish but rests on low-skill models (see issues).\n\nGreeks: check_greeks fully clean - 0 call deltas outside [0,1], 0 put deltas outside [-1,0], 0 negative gamma, 0 negative vega, 0 calls below intrinsic. Deltas, gamma and vega all behave monotonically across the strike ladder, and tau_horizon is correctly shortened versus tau_now on all 54 contracts.\n\nCoverage: 54 contracts, 2 expiries (2026-11-06, 2026-11-13), moneyness 0.904-1.090, within the requested +/-10% band.\n\nBOTTOM LINE: Approved for the Greeks/risk-surface use case, with caveats. The two expiries available both straddle the Nov 2 earnings release while the forecast stops Oct 30, so the expected_pnl column should NOT be read as a trade signal - the uniformly negative put P&L is an event-premium decay artifact. Combined with the one-sided IV-vs-quote disagreement on 100% of contracts, I would re-run after re-syncing the IV and quote snapshots, and ideally add an expiry on or before Oct 30 so at least one contract set is clean of the earnings jump.",
+  "output_dir": "C:\\Users\\joshf\\DevTools\\GitHub\\transformer-options-pricing\\valuation runs\\20261018_181813"
+}

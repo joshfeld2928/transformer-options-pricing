@@ -1,17 +1,23 @@
 """
-Feature-panel construction and transformer train/forecast, parameterised
-from ``smoke_test_logreturn.py``.
+Feature-panel construction and transformer train/forecast (JAX).
 
 ``run_forecasts`` refuses any panel that fails ``require_valid_panel``, so the
 models can only ever see data that passed the schema gate.
+
+Training is leakage-safe: windows are split chronologically with a purge gap,
+the scaler is fit on training rows only, and early stopping watches the
+validation split.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 
+import jax.random as jr
 import numpy as np
 import pandas as pd
-import torch
-from torch import nn, optim
+
+from models import MODEL_NAMES, build_model, mark_cols, model_kwargs, window_kind
 
 from .company_data import _get_underlying_history
 from .macro_indicators import get_macro_data
@@ -23,11 +29,15 @@ from .schemas import (
     ModelForecast,
     require_valid_panel,
 )
+from .training import Scaler, TrainConfig, TrainResult, predict, save_checkpoint, train_model
+from .windows import forecast_inputs, make_windows, n_windows, rows_touched, split_indices
 
-# Small dims so CPU training finishes in seconds.
-SMALL_STANDARD_KWARGS = dict(d_model=64, n_heads=4, e_layers=1, d_layers=1, d_ff=128, dropout=0.05, freq="d")
-SMALL_PYRAFORMER_KWARGS = dict(d_model=64, d_inner_hid=64, d_bottleneck=32, d_k=32, d_v=32,
-                               n_head=4, n_layer=2, window_size=[3, 3, 3])
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CHECKPOINT_ROOT = REPO_ROOT / "checkpoints"
+
+# Below this many validation windows, early stopping is too noisy to trust.
+MIN_VAL_WINDOWS = 10
+FALLBACK_EPOCHS = 30
 
 
 def build_feature_panel(request: MarketDataRequest, end_date=None) -> pd.DataFrame:
@@ -57,130 +67,128 @@ def time_features(dates, n_cols=3):
     return np.stack(cols, axis=-1).astype(np.float32)
 
 
-def _make_windows(values, marks, cfg):
-    n_features = values.shape[1]
-    enc_x, enc_mark, dec_x, dec_mark, target = [], [], [], [], []
-    for i in range(len(values) - cfg.seq_len - cfg.pred_len + 1):
-        enc_x.append(values[i:i + cfg.seq_len])
-        enc_mark.append(marks[i:i + cfg.seq_len])
-        dec_hist = values[i + cfg.seq_len - cfg.label_len:i + cfg.seq_len]
-        dec_x.append(np.concatenate([dec_hist, np.zeros((cfg.pred_len, n_features), np.float32)]))
-        dec_mark.append(marks[i + cfg.seq_len - cfg.label_len:i + cfg.seq_len + cfg.pred_len])
-        target.append(values[i + cfg.seq_len:i + cfg.seq_len + cfg.pred_len])
-    return [torch.from_numpy(np.stack(a)) for a in (enc_x, enc_mark, dec_x, dec_mark, target)]
+def train_config(cfg: ForecastConfig) -> TrainConfig:
+    return TrainConfig(epochs=cfg.epochs, batch_size=cfg.batch_size, lr=cfg.lr, weight_decay=cfg.weight_decay,
+                       patience=cfg.patience, target_weight=cfg.target_weight)
 
 
-def _make_windows_pyraformer(values, marks4, cfg):
-    """Encoder-only windows with the FC head's +1 zero predict token."""
-    n_features = values.shape[1]
-    enc_x, enc_mark, target = [], [], []
-    for i in range(len(values) - cfg.seq_len - cfg.pred_len + 1):
-        enc_x.append(np.concatenate([values[i:i + cfg.seq_len], np.zeros((1, n_features), np.float32)]))
-        enc_mark.append(marks4[i:i + cfg.seq_len + 1])
-        target.append(values[i + cfg.seq_len:i + cfg.seq_len + cfg.pred_len])
-    enc_x, enc_mark, target = (torch.from_numpy(np.stack(a)) for a in (enc_x, enc_mark, target))
-    dec_x = torch.zeros(len(enc_x), cfg.pred_len, n_features)
-    dec_mark = torch.zeros(len(enc_x), cfg.pred_len, marks4.shape[1])
-    return enc_x, enc_mark, dec_x, dec_mark, target
+def model_key(cfg: ForecastConfig, name):
+    """Stable per-model init/training keys (fold_in by registry index, not hash())."""
+    init_key, train_key = jr.split(jr.fold_in(jr.PRNGKey(cfg.seed), MODEL_NAMES.index(name)))
+    return init_key, train_key
 
 
-def _forecast_inputs(values, marks, future_marks, cfg):
-    n_features = values.shape[1]
-    enc_x = values[-cfg.seq_len:]
-    enc_mark = marks[-cfg.seq_len:]
-    dec_x = np.concatenate([values[-cfg.label_len:], np.zeros((cfg.pred_len, n_features), np.float32)])
-    dec_mark = np.concatenate([marks[-cfg.label_len:], future_marks])
-    return [torch.from_numpy(a[None, ...]) for a in (enc_x, enc_mark, dec_x, dec_mark)]
+@dataclass
+class FittedModel:
+    """A trained model plus everything needed to window, predict and invert its output."""
+
+    name: str
+    model: object
+    scaler: Scaler
+    build_kwargs: dict
+    result: TrainResult
+    n_train_windows: int
+    n_val_windows: int
+
+    def windows(self, values, dates, cfg):
+        """Scaled windows over the full ``values`` array, for indexing by window id."""
+        return make_windows(self.scaler.transform(values), time_features(dates, mark_cols(self.name)), cfg,
+                            window_kind(self.name))
 
 
-def _forecast_inputs_pyraformer(values, marks4, future_marks4, cfg):
-    n_features = values.shape[1]
-    enc_x = np.concatenate([values[-cfg.seq_len:], np.zeros((1, n_features), np.float32)])
-    enc_mark = np.concatenate([marks4[-cfg.seq_len:], future_marks4[:1]])
-    return [torch.from_numpy(enc_x[None, ...]), torch.from_numpy(enc_mark[None, ...]),
-            torch.zeros(1, cfg.pred_len, n_features), torch.zeros(1, cfg.pred_len, marks4.shape[1])]
+def fit_model(name, values, dates, cfg: ForecastConfig, train_idx, val_idx, *, target_idx, epochs=None,
+              log=print) -> FittedModel:
+    """Fit the scaler on rows touched by ``train_idx`` windows, then train ``name``.
 
+    ``val_idx`` drives early stopping. If it has fewer than ``MIN_VAL_WINDOWS``
+    windows, training runs a fixed ``FALLBACK_EPOCHS`` instead.
+    """
+    scaler = Scaler.fit(values[:rows_touched(train_idx, cfg)])
+    marks = time_features(dates, mark_cols(name))
+    windows = make_windows(scaler.transform(values), marks, cfg, window_kind(name))
+    train = windows.take(train_idx)
+    val = windows.take(val_idx) if len(val_idx) >= MIN_VAL_WINDOWS else None
+    if val is None and epochs is None:
+        if len(val_idx):
+            log(f"  only {len(val_idx)} validation windows (< {MIN_VAL_WINDOWS}); "
+                f"training {FALLBACK_EPOCHS} epochs without early stopping")
+        epochs = min(cfg.epochs, FALLBACK_EPOCHS)
 
-def _build_model(name, n_features, cfg):
-    dims = dict(enc_in=n_features, dec_in=n_features, c_out=n_features,
-                seq_len=cfg.seq_len, label_len=cfg.label_len)
-    if name == "autoformer":
-        from inference.autoformer_inference import build_autoformer
-        return build_autoformer(**dims, pred_len=cfg.pred_len, **SMALL_STANDARD_KWARGS)
+    kwargs = model_kwargs(name, values.shape[1], cfg.seq_len, cfg.label_len, cfg.pred_len)
     if name == "fedformer":
-        from inference.fedformer_inference import build_fedformer
-        return build_fedformer(**dims, pred_len=cfg.pred_len, modes=16, **SMALL_STANDARD_KWARGS)
-    if name == "informer":
-        from inference.informer_inference import build_informer
-        return build_informer(**dims, out_len=cfg.pred_len, **SMALL_STANDARD_KWARGS)
-    if name == "pyraformer":
-        from inference.pyraformer_inference import build_pyraformer
-        return build_pyraformer(enc_in=n_features, c_out=n_features, input_size=cfg.seq_len,
-                                predict_step=cfg.pred_len, device="cpu", **SMALL_PYRAFORMER_KWARGS)
-    raise ValueError(f"unknown model {name}")
-
-
-def _train(model, windows, cfg):
-    enc_x, enc_mark, dec_x, dec_mark, target = windows
-    model.train()
-    optimizer = optim.Adam(model.parameters(), lr=cfg.lr)
-    loss_fn = nn.MSELoss()
-    loss = None
-    for _ in range(cfg.epochs):
-        optimizer.zero_grad()
-        loss = loss_fn(model(enc_x, enc_mark, dec_x, dec_mark), target)
-        loss.backward()
-        optimizer.step()
-    return float(loss.item())
+        kwargs["mode_seed"] = cfg.seed
+    init_key, train_key = model_key(cfg, name)
+    model = build_model(name, key=init_key, **kwargs)
+    result = train_model(model, train, val, train_config(cfg), target_idx=target_idx, key=train_key,
+                         epochs=epochs, log=log)
+    return FittedModel(name, result.model, scaler, kwargs, result, train.size, 0 if val is None else val.size)
 
 
 def run_forecasts(panel, request: MarketDataRequest, cfg: ForecastConfig, log=print):
     """Train each configured model on ``panel`` and forecast ``pred_len`` days.
 
-    Returns ``(forecasts, train_losses, last_close)`` where ``forecasts`` maps
-    model name to a validated ``ModelForecast``.
+    Returns ``(forecasts, diagnostics, last_close)``. ``forecasts`` maps model
+    name to a validated ``ModelForecast``; ``diagnostics`` maps it to training
+    stats (losses, best epoch, window counts, time).
     """
     require_valid_panel(panel, request, cfg)
-    torch.manual_seed(cfg.seed)
 
     values = panel.values.astype(np.float32)
-    mean, std = values.mean(axis=0), values.std(axis=0)
-    std[std == 0] = 1.0
-    scaled = ((values - mean) / std).astype(np.float32)
-    n_features = scaled.shape[1]
     target_idx = list(panel.columns).index(TARGET)
-
-    last_date = panel.index[-1]
     last_close = _last_close(panel, request)
-    future_dates = pd.bdate_range(start=last_date + pd.Timedelta(days=1), periods=cfg.pred_len)
+    future_dates = pd.bdate_range(start=panel.index[-1] + pd.Timedelta(days=1), periods=cfg.pred_len)
+    splits = split_indices(n_windows(len(values), cfg), cfg.pred_len, val_frac=cfg.val_frac)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    marks3, marks4 = time_features(panel.index), time_features(panel.index, n_cols=4)
-    fut3, fut4 = time_features(future_dates), time_features(future_dates, n_cols=4)
-
-    forecasts, losses = {}, {}
+    forecasts, diagnostics = {}, {}
     for name in cfg.models:
-        if name == "pyraformer":
-            windows = _make_windows_pyraformer(scaled, marks4, cfg)
-            inputs = _forecast_inputs_pyraformer(scaled, marks4, fut4, cfg)
-        else:
-            windows = _make_windows(scaled, marks3, cfg)
-            inputs = _forecast_inputs(scaled, marks3, fut3, cfg)
+        log(f"Training {name} on {len(splits['train'])} windows (val {len(splits['val'])})...")
+        fitted = fit_model(name, values, panel.index, cfg, splits["train"], splits["val"],
+                           target_idx=target_idx, log=log)
+        res = fitted.result
+        diag = {
+            "train_loss": res.history["train_loss"][-1],
+            "best_val_target_mse": res.best_val_target_mse,
+            "best_epoch": res.best_epoch,
+            "epochs_run": len(res.history["train_loss"]),
+            "n_train_windows": fitted.n_train_windows,
+            "n_val_windows": fitted.n_val_windows,
+            "n_params": res.n_params,
+            "train_time_s": round(res.train_time_s, 2),
+        }
 
-        log(f"Training {name} on {len(windows[0])} windows...")
-        model = _build_model(name, n_features, cfg)
-        losses[name] = _train(model, windows, cfg)
+        if cfg.refit_full and fitted.n_val_windows:
+            # Use the newest data too: retrain on train+val for the epoch count early stopping picked.
+            all_idx = np.arange(splits["val"][-1] + 1)
+            fitted = fit_model(name, values, panel.index, cfg, all_idx, np.array([], int),
+                               target_idx=target_idx, epochs=res.best_epoch, log=log)
+            diag["refit_windows"] = len(all_idx)
+            diag["train_time_s"] = round(diag["train_time_s"] + fitted.result.train_time_s, 2)
 
-        model.eval()
-        with torch.no_grad():
-            pred = model(*inputs).squeeze(0).numpy()
-        log_ret = pred[:, target_idx] * std[target_idx] + mean[target_idx]
+        marks, future_marks = time_features(panel.index, mark_cols(name)), time_features(future_dates,
+                                                                                         mark_cols(name))
+        inputs = forecast_inputs(fitted.scaler.transform(values), marks, future_marks, cfg, window_kind(name))
+        pred = predict(fitted.model, inputs)[0]
+        log_ret = fitted.scaler.inverse(pred[:, target_idx], target_idx)
         forecasts[name] = ModelForecast(
             model=name,
             dates=[str(d.date()) for d in future_dates],
             predicted_log_return=log_ret.astype(float).tolist(),
             implied_close=(last_close * np.exp(np.cumsum(log_ret))).astype(float).tolist(),
         )
-    return forecasts, losses, last_close
+        diagnostics[name] = diag
+        log(f"  {name}: best epoch {diag['best_epoch']}, val target MSE {diag['best_val_target_mse']}, "
+            f"{diag['train_time_s']}s")
+
+        if cfg.save_checkpoints:
+            path = save_checkpoint(
+                CHECKPOINT_ROOT / request.ticker / name / stamp, name, fitted.model, fitted.build_kwargs,
+                fitted.scaler,
+                extra={"features": list(panel.columns), "target_idx": target_idx,
+                       "forecast_config": cfg.model_dump(), "train_end": str(panel.index[-1].date()),
+                       "diagnostics": diag, "history": fitted.result.history})
+            log(f"  checkpoint: {path}")
+    return forecasts, diagnostics, last_close
 
 
 def _last_close(panel, request):

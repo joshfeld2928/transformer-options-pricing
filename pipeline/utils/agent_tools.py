@@ -41,7 +41,7 @@ class RunContext:
     request: MarketDataRequest | None = None
     panel: pd.DataFrame | None = None
     forecasts: dict = field(default_factory=dict)
-    train_losses: dict = field(default_factory=dict)
+    train_diagnostics: dict = field(default_factory=dict)
     contracts: pd.DataFrame | None = None
     valuation: pd.DataFrame | None = None
     validation: ValidationReport | None = None
@@ -78,7 +78,7 @@ def make_load_skill():
 
 def market_data_tools(ctx: RunContext):
     @tool
-    def build_feature_panel(ticker: str, history_months: int = 6, features: list[str] | None = None) -> str:
+    def build_feature_panel(ticker: str, history_months: int = 24, features: list[str] | None = None) -> str:
         """Pull, clean and align daily underlying + macro features for a ticker,
         then validate them for the transformers. Returns the validation report."""
         try:
@@ -112,12 +112,13 @@ def market_data_tools(ctx: RunContext):
 def greeks_tools(ctx: RunContext, allow_code=True):
     @tool
     def get_forecasts() -> str:
-        """Each model's forecast, training loss, and deterministic sanity checks."""
+        """Each model's forecast, training diagnostics (incl. held-out validation
+        MSE on scaled log returns), and deterministic sanity checks."""
         summary = {
             name: {
                 "horizon_close": round(f.implied_close[-1], 4),
                 "cum_log_return": round(sum(f.predicted_log_return), 5),
-                "train_loss": round(ctx.train_losses.get(name, float("nan")), 5),
+                **ctx.train_diagnostics.get(name, {}),
             }
             for name, f in ctx.forecasts.items()
         }

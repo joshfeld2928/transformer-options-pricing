@@ -1,0 +1,22 @@
+# Models / training (CPU wheels install natively on Windows, macOS and Linux)
+jax[cpu]>=0.4.35
+equinox>=0.11.10
+optax>=0.2.4
+numpy>=2.0
+scipy
+pandas
+matplotlib>=3.8
+
+# Data
+yfinance
+fredapi
+python-dotenv
+pydantic>=2
+
+# Agents
+langchain
+langchain-anthropic
+langgraph
+
+# Tests
+pytest

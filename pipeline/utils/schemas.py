@@ -40,7 +40,7 @@ _FEATURE_BOUNDS = {
 # Fri -> Tue over a long weekend is 4 days; anything past a week is a hole.
 _MAX_CALENDAR_GAP_DAYS = 7
 # Training windows required beyond one seq_len + pred_len span.
-MIN_TRAINING_WINDOWS = 20
+MIN_TRAINING_WINDOWS = 40
 
 
 class PanelValidationError(ValueError):
@@ -51,7 +51,7 @@ class MarketDataRequest(BaseModel):
     """Arguments the market data agent may request."""
 
     ticker: str = Field(pattern=r"^[A-Z][A-Z0-9.\-]{0,9}$")
-    history_months: int = Field(6, ge=3, le=60)
+    history_months: int = Field(24, ge=3, le=120)
     features: list[str] = Field(default_factory=lambda: list(DEFAULT_FEATURES))
 
     @field_validator("ticker", mode="before")
@@ -79,8 +79,18 @@ class ForecastConfig(BaseModel):
     seq_len: int = Field(60, ge=16, le=512)
     label_len: int = Field(30, ge=1)
     pred_len: int = Field(10, ge=1, le=60)
-    epochs: int = Field(8, ge=1, le=500)
+    # Upper bound; early stopping on the validation split usually ends training sooner.
+    epochs: int = Field(100, ge=1, le=1000)
+    batch_size: int = Field(32, ge=4, le=1024)
     lr: float = Field(1e-3, gt=0, lt=1)
+    weight_decay: float = Field(1e-4, ge=0, lt=1)
+    patience: int = Field(10, ge=1, le=200)
+    val_frac: float = Field(0.15, ge=0.0, lt=0.5)
+    # Share of the loss on the target column; the rest is spread over the other features.
+    target_weight: float = Field(0.5, gt=0, le=1)
+    # After early stopping, retrain on train+val for the best epoch count before forecasting.
+    refit_full: bool = True
+    save_checkpoints: bool = False
     seed: int = 42
 
     @model_validator(mode="after")
